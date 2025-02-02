@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Document Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-md mx-auto bg-white rounded-lg shadow-lg p-6">
+            <h1 class="text-2xl font-bold mb-6 text-center">Document Chat Assistant</h1>
+
+            <div class="mb-6">
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center" id="drop-zone">
+                    <div class="space-y-2">
+                        <div class="text-gray-600">
+                            Drag and drop your document here<br>
+                            or
+                        </div>
+                        <label class="inline-block">
+                            <span class="bg-blue-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-600 transition-colors">
+                                Browse Files
+                            </span>
+                            <input type="file" id="file-input" class="hidden" accept=".pdf,.txt,.doc,.docx">
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="file-info" class="hidden mb-4">
+                <div class="bg-gray-100 p-3 rounded">
+                    <p class="text-sm text-gray-600">Selected file: <span id="filename" class="font-medium"></span></p>
+                </div>
+            </div>
+
+            <div id="upload-status" class="hidden mb-4">
+                <div class="bg-blue-100 text-blue-700 p-3 rounded">
+                    <p class="text-sm">Uploading... Please wait.</p>
+                </div>
+            </div>
+
+            <div id="error-message" class="hidden mb-4">
+                <div class="bg-red-100 text-red-700 p-3 rounded">
+                    <p class="text-sm"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileInfo = document.getElementById('file-info');
+        const filename = document.getElementById('filename');
+        const uploadStatus = document.getElementById('upload-status');
+        const errorMessage = document.getElementById('error-message');
+
+        // Prevent default drag behaviors
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        // Highlight drop zone when dragging over it
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        // Handle dropped files
+        dropZone.addEventListener('drop', handleDrop, false);
+        fileInput.addEventListener('change', handleFiles, false);
+
+        function preventDefaults (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            dropZone.classList.add('border-blue-500');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('border-blue-500');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles({ target: { files } });
+        }
+
+        function handleFiles(e) {
+            const file = e.target.files[0];
+            if (file) {
+                showFileInfo(file);
+                uploadFile(file);
+            }
+        }
+
+        function showFileInfo(file) {
+            filename.textContent = file.name;
+            fileInfo.classList.remove('hidden');
+            errorMessage.classList.add('hidden');
+        }
+
+        function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            uploadStatus.classList.remove('hidden');
+
+            fetch('/', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                uploadStatus.classList.add('hidden');
+                if (data.error) {
+                    showError(data.error);
+                } else if (data.redirect) {
+                    window.location.href = data.redirect;
+                }
+            })
+            .catch(error => {
+                uploadStatus.classList.add('hidden');
+                showError('Upload failed. Please try again.');
+            });
+        }
+
+        function showError(message) {
+            errorMessage.querySelector('p').textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
