@@ -3,81 +3,181 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with Document</title>
+    <title>Enhanced Document Chat</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/marked@4.0.0/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Chat tabs scrollbar */
+        #chat-tabs {
+            scrollbar-width: thin;
+            scrollbar-color: #cbd5e1 #f1f1f1;
+        }
+
+        #chat-tabs::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        #chat-tabs::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        #chat-tabs::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        #chat-tabs::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Markdown Styles */
         .markdown-content h1 { @apply text-2xl font-bold mb-4 mt-6; }
         .markdown-content h2 { @apply text-xl font-bold mb-3 mt-5; }
         .markdown-content h3 { @apply text-lg font-bold mb-2 mt-4; }
-        .markdown-content p { @apply mb-4; }
-        .markdown-content ul { @apply list-disc ml-6 mb-4; }
-        .markdown-content ol { @apply list-decimal ml-6 mb-4; }
-        .markdown-content blockquote { @apply border-l-4 border-gray-300 pl-4 italic my-4; }
-        .markdown-content code { @apply bg-gray-100 px-1 rounded; }
-        .markdown-content pre { @apply bg-gray-100 p-4 rounded mb-4 overflow-x-auto; }
-        .markdown-content a { @apply text-blue-600 hover:underline; }
-        .markdown-content table { @apply min-w-full border border-gray-300 mb-4; }
-        .markdown-content th { @apply bg-gray-100 border px-4 py-2; }
+        .markdown-content p { @apply mb-4 leading-relaxed; }
+        .markdown-content ul { @apply list-disc ml-6 mb-4 space-y-2; }
+        .markdown-content ol { @apply list-decimal ml-6 mb-4 space-y-2; }
+        .markdown-content blockquote { @apply border-l-4 border-blue-300 pl-4 italic my-4 bg-blue-50 py-2 rounded-r; }
+        .markdown-content code { @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono; }
+        .markdown-content pre { @apply bg-gray-50 p-4 rounded-lg mb-4 overflow-x-auto shadow-sm; }
+        .markdown-content a { @apply text-blue-600 hover:text-blue-800 underline; }
+        .markdown-content table { @apply min-w-full border border-gray-200 mb-4 rounded-lg overflow-hidden; }
+        .markdown-content th { @apply bg-gray-50 border px-4 py-2 text-left; }
         .markdown-content td { @apply border px-4 py-2; }
-        .markdown-content img { @apply max-w-full h-auto; }
-        .markdown-content hr { @apply my-4 border-t border-gray-300; }
-        .markdown-content strong { @apply font-bold; }
+        .markdown-content img { @apply max-w-full h-auto rounded-lg shadow-sm; }
+        .markdown-content hr { @apply my-6 border-t border-gray-200; }
+        .markdown-content strong { @apply font-semibold; }
         .markdown-content em { @apply italic; }
+
+        /* Animation */
+        @keyframes slideIn {
+            from { transform: translateY(10px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .message-animation {
+            animation: slideIn 0.3s ease-out forwards;
+        }
+
+        .chat-tab-active {
+            background-color: #3b82f6;
+            color: white;
+        }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
     <div class="container mx-auto px-4 py-8">
-        <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-lg">
-            <!-- Header -->
-            <div class="border-b p-4 flex justify-between items-center">
-                <h1 class="text-xl font-semibold">Document Chat</h1>
-                <div class="flex space-x-4 items-center">
-                    <select id="api-select" class="border rounded px-3 py-1">
-                        {% for api in apis %}
-                        <option value="{{ api }}">{{ api|title }}</option>
-                        {% endfor %}
-                    </select>
-                    <label class="flex items-center">
-                        <input type="checkbox" id="stream-toggle" class="mr-2" checked>
-                        Stream
-                    </label>
-                    <button onclick="usePreviousContext()"
-                            class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600 transition-colors">
-                        Use Chat History
-                    </button>
-                    <label class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors cursor-pointer">
-                        Add File
-                        <input type="file" id="chat-file-input" class="hidden" multiple>
-                    </label>
-                    <button onclick="clearChat()" class="text-red-600 hover:text-red-800">
-                        Clear Chat
+        <!-- Chat tabs -->
+        <div class="max-w-full mx-auto mb-4 bg-white rounded-xl shadow-xl overflow-hidden border border-gray-100">
+            <div class="flex items-center p-4 border-b border-gray-100">
+                <div class="flex space-x-2 overflow-x-auto" id="chat-tabs">
+                    <!-- Chat tabs will be inserted here -->
+                    <button onclick="createNewChat()" class="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        New Chat
                     </button>
                 </div>
             </div>
+        </div>
 
-            <!-- File Upload Preview -->
-            <div id="file-preview" class="hidden border-b p-2 bg-gray-50">
-                <div id="file-list" class="flex flex-wrap gap-2"></div>
+        <!-- Main content area -->
+        <div class="flex gap-4">
+            <!-- Left side: Chat interface -->
+            <div class="flex-grow max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden border border-gray-100">
+                <!-- Header -->
+                <div class="bg-white border-b border-gray-100 p-6">
+                    <div class="flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <h1 class="text-2xl font-semibold text-gray-800 flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4-4-4z"/>
+                            </svg>
+                            Document Chat
+                        </h1>
+                        <div class="flex flex-wrap gap-4 items-center">
+                            <select id="api-select" class="bg-white border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                {% for api in apis %}
+                                <option value="{{ api }}">{{ api|title }}</option>
+                                {% endfor %}
+                            </select>
+                            <label class="flex items-center gap-2 text-sm text-gray-600">
+                                <input type="checkbox" id="stream-toggle" class="w-4 h-4 text-blue-500 rounded focus:ring-blue-500" checked>
+                                Stream Response
+                            </label>
+                            <button onclick="clearChat()" class="text-red-500 hover:text-red-600 transition-colors flex items-center gap-2 text-sm font-medium">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                </svg>
+                                Clear Chat
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Messages -->
+                <div id="chat-messages" class="h-[calc(100vh-320px)] overflow-y-auto p-6 space-y-6 bg-gray-50"></div>
+
+                <!-- Input Area -->
+                <div class="border-t border-gray-100 p-6 bg-white">
+                    <div class="flex gap-4">
+                        <input type="text" id="message-input"
+                               class="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400"
+                               placeholder="Type your message...">
+                        <button onclick="sendMessage()"
+                                class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition-all duration-200 flex items-center gap-2 font-medium">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                            </svg>
+                            Send
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            <!-- Chat Messages -->
-            <div id="chat-messages" class="h-[500px] overflow-y-auto p-4 space-y-4">
-                <!-- Messages will be inserted here -->
-            </div>
-
-            <!-- Input Area -->
-            <div class="border-t p-4">
-                <div class="flex space-x-4">
-                    <input type="text" id="message-input"
-                           class="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                           placeholder="Type your message...">
-                    <button onclick="sendMessage()"
-                            class="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition-colors">
-                        Send
-                    </button>
+            <!-- Right side: Files panel -->
+            <div class="w-80 bg-white rounded-xl shadow-xl overflow-hidden border border-gray-100 h-[calc(100vh-120px)]">
+                <div class="p-4 border-b border-gray-100">
+                    <h3 class="text-lg font-semibold text-gray-800">Uploaded Files</h3>
+                    <label class="mt-4 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-all duration-200 cursor-pointer flex items-center gap-2 text-sm font-medium">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                        </svg>
+                        Upload Files
+                        <input type="file" id="file-input" class="hidden" multiple accept=".pdf,.txt,.doc,.docx">
+                    </label>
+                </div>
+                <div id="file-list" class="p-4 space-y-2 overflow-y-auto max-h-[calc(100%-120px)]">
+                    <!-- Files will be listed here -->
                 </div>
             </div>
         </div>
@@ -99,15 +199,222 @@
             }
         });
 
-        const messageInput = document.getElementById('message-input');
-        const chatMessages = document.getElementById('chat-messages');
-        const apiSelect = document.getElementById('api-select');
+        let chats = [{
+            id: 'chat-1',
+            messages: [],
+            files: []
+        }];
+        let currentChatId = 'chat-1';
 
-        messageInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
+        // Initialize event listeners and UI
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize first chat
+            addChatTab('chat-1');
+            switchToChat('chat-1');
+
+            // Setup event listeners
+            const messageInput = document.getElementById('message-input');
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            const fileInput = document.getElementById('file-input');
+            fileInput.addEventListener('change', handleFileUpload);
         });
+
+        // Chat management functions
+        function createNewChat() {
+            const chatId = `chat-${chats.length + 1}`;
+            chats.push({
+                id: chatId,
+                messages: [],
+                files: []
+            });
+            addChatTab(chatId);
+            switchToChat(chatId);
+        }
+
+        function addChatTab(chatId) {
+            const tabsContainer = document.getElementById('chat-tabs');
+            const tab = document.createElement('div');
+            tab.className = 'flex items-center px-4 py-2 bg-gray-100 rounded-lg mr-2 cursor-pointer';
+            tab.innerHTML = `
+                <span class="mr-2">Chat ${chatId.split('-')[1]}</span>
+                <button onclick="closeChat('${chatId}')" class="text-gray-500 hover:text-red-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            `;
+            tab.setAttribute('data-chat-id', chatId);
+            tab.onclick = (e) => {
+                if (e.target === tab || e.target.tagName !== 'BUTTON') {
+                    switchToChat(chatId);
+                }
+            };
+            tabsContainer.insertBefore(tab, tabsContainer.lastElementChild);
+        }
+
+        function switchToChat(chatId) {
+            currentChatId = chatId;
+            const chat = chats.find(c => c.id === chatId);
+
+            if (!chat) return;
+
+            // Update UI to show current chat's messages
+            const chatMessages = document.getElementById('chat-messages');
+            chatMessages.innerHTML = '';
+            chat.messages.forEach(msg => {
+                appendMessage(msg.content, msg.isUser);
+            });
+
+            // Update files panel
+            const fileList = document.getElementById('file-list');
+            fileList.innerHTML = '';
+            if (chat.files && chat.files.length > 0) {
+                chat.files.forEach(filename => {
+                    addFileToPreview(filename);
+                });
+                updateFileCount(0); // Update count without incrementing
+            }
+
+            // Update active tab styling
+            document.querySelectorAll('#chat-tabs > div').forEach(tab => {
+                if (tab.getAttribute('data-chat-id') === chatId) {
+                    tab.classList.add('bg-blue-100');
+                    tab.classList.remove('bg-gray-100');
+                } else {
+                    tab.classList.remove('bg-blue-100');
+                    tab.classList.add('bg-gray-100');
+                }
+            });
+        }
+
+        function closeChat(chatId) {
+            if (chats.length <= 1) return; // Don't close the last chat
+
+            const index = chats.findIndex(c => c.id === chatId);
+            chats.splice(index, 1);
+
+            // Remove tab
+            const tab = document.querySelector(`[data-chat-id="${chatId}"]`);
+            tab.remove();
+
+            // Switch to another chat if closing current
+            if (currentChatId === chatId) {
+                switchToChat(chats[0].id);
+            }
+        }
+
+        function handleFileUpload(event) {
+            const files = event.target.files;
+            if (!files.length) return;
+
+            Array.from(files).forEach(file => {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('chatId', currentChatId);
+
+                fetch('/', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        addFileToPreview(data.filename);
+                        updateFileCount(1);
+
+                        // Add status message to chat
+                        const statusMessage = `File "${data.filename}" has been uploaded and added to the context.`;
+                        appendMessage(statusMessage, false);
+
+                        // Save file to chat's files list
+                        const chat = chats.find(c => c.id === currentChatId);
+                        if (chat) {
+                            if (!chat.files) chat.files = [];
+                            chat.files.push(data.filename);
+                        }
+                    } else {
+                        showError(data.error || 'Failed to upload file');
+                    }
+                })
+                .catch(error => {
+                    showError('Error uploading file');
+                    console.error('Upload error:', error);
+                });
+            });
+        }
+
+        function updateFileCount(change) {
+            const chat = chats.find(c => c.id === currentChatId);
+            if (!chat) return;
+
+            if (!chat.files) chat.files = [];
+            const currentCount = chat.files.length + (change || 0);
+
+            const fileCount = document.getElementById('file-count');
+            if (fileCount) {
+                fileCount.textContent = `${currentCount} uploaded`;
+            }
+        }
+
+        function addFileToPreview(filename) {
+            const fileList = document.getElementById('file-list');
+            if (!fileList) return;
+
+            const fileDiv = document.createElement('div');
+            fileDiv.className = 'flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm';
+            fileDiv.dataset.filename = filename;
+
+            fileDiv.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                    </svg>
+                    <span class="text-sm text-gray-700 truncate">${filename}</span>
+                </div>
+                <button onclick="removeFile('${filename}')" class="text-gray-400 hover:text-red-500 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            `;
+
+            fileList.appendChild(fileDiv);
+        }
+
+        function removeFile(filename) {
+            fetch(`/remove-file/${filename}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    chatId: currentChatId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const fileElements = document.querySelectorAll('#file-list > div');
+                    fileElements.forEach(el => {
+                        const fileSpan = el.querySelector('span');
+                        if (fileSpan && fileSpan.textContent === filename) {
+                            el.remove();
+                            updateFileCount(-1);
+                        }
+                    });
+                } else {
+                    console.error('Failed to remove file:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error removing file:', error);
+            });
+        }
 
         function formatMarkdown(content, isUser) {
             if (isUser) return content;
@@ -120,19 +427,24 @@
         }
 
         function appendMessage(content, isUser = false) {
+            const chatMessages = document.getElementById('chat-messages');
+            if (!chatMessages) {
+                console.error('Chat messages container not found');
+                return null;
+            }
+
             const messageDiv = document.createElement('div');
-            messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+            messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'} message-animation`;
 
             const messageBubble = document.createElement('div');
-            messageBubble.className = `max-w-[80%] rounded-lg p-3 ${
-                isUser ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800 markdown-content'
+            messageBubble.className = `max-w-[80%] rounded-lg p-4 ${
+                isUser ? 'bg-blue-500 text-white shadow-sm' : 'bg-white text-gray-800 shadow-sm markdown-content'
             }`;
 
             if (isUser) {
                 messageBubble.textContent = content;
             } else {
                 messageBubble.innerHTML = formatMarkdown(content);
-                // Initialize syntax highlighting for code blocks
                 messageBubble.querySelectorAll('pre code').forEach((block) => {
                     hljs.highlightBlock(block);
                 });
@@ -141,10 +453,18 @@
             messageDiv.appendChild(messageBubble);
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            // Save message to current chat
+            const chat = chats.find(c => c.id === currentChatId);
+            if (chat) {
+                chat.messages.push({ content, isUser });
+            }
+
             return messageBubble;
         }
 
         function sendMessage() {
+            const messageInput = document.getElementById('message-input');
             const message = messageInput.value.trim();
             if (!message) return;
 
@@ -154,334 +474,192 @@
             messageInput.disabled = true;
 
             if (streamMode) {
-                // Streaming mode
-                const responseBubble = appendMessage('', false);
-                let fullResponse = '';
-
-                fetch('/chat/stream', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        message: message,
-                        api: apiSelect.value
-                    })
-                }).then(response => {
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
-
-                    function processText(text) {
-                        const lines = text.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const data = line.slice(6);
-                                if (data !== '[DONE]') {
-                                    try {
-                                        const parsed = JSON.parse(data);
-                                        if (parsed.content) {
-                                            fullResponse += parsed.content;
-                                            responseBubble.innerHTML = formatMarkdown(fullResponse);
-                                            // Highlight any code blocks
-                                            responseBubble.querySelectorAll('pre code').forEach((block) => {
-                                                hljs.highlightBlock(block);
-                                            });
-                                            chatMessages.scrollTop = chatMessages.scrollHeight;
-                                        }
-                                    } catch (e) {
-                                        console.error('Failed to parse JSON:', e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    function pump() {
-                        return reader.read().then(({done, value}) => {
-                            if (done) {
-                                if (buffer) {
-                                    processText(buffer);
-                                }
-                                messageInput.disabled = false;
-                                messageInput.focus();
-                                return;
-                            }
-
-                            buffer += decoder.decode(value, {stream: true});
-                            const lines = buffer.split('\n\n');
-                            buffer = lines.pop();
-
-                            for (const line of lines) {
-                                processText(line);
-                            }
-
-                            return pump();
-                        });
-                    }
-
-                    return pump();
-                }).catch(error => {
-                    console.error('Streaming error:', error);
-                    responseBubble.innerHTML = formatMarkdown('An error occurred while streaming the response.');
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                });
+                handleStreamingResponse(message);
             } else {
-                // Non-streaming mode
-                fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        message: message,
-                        api: apiSelect.value
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        appendMessage(`Error: ${data.error}`);
-                    } else {
-                        appendMessage(data.response);
-                    }
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                })
-                .catch(error => {
-                    appendMessage('An error occurred. Please try again.');
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                });
+                handleNormalResponse(message);
             }
         }
 
+        function handleStreamingResponse(message) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageInput = document.getElementById('message-input');
+            const responseBubble = appendMessage('', false);
+            let fullResponse = '';
+
+            fetch('/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    api: document.getElementById('api-select').value,
+                    chatId: currentChatId
+                })
+            }).then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                function processText(text) {
+                    const lines = text.split('\n');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                return true;
+                            }
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.error) {
+                                    responseBubble.innerHTML = formatMarkdown(`Error: ${parsed.error}`);
+                                    return true;
+                                }
+                                if (parsed.content) {
+                                    fullResponse += parsed.content;
+                                    responseBubble.innerHTML = formatMarkdown(fullResponse);
+                                    responseBubble.querySelectorAll('pre code').forEach((block) => {
+                                        hljs.highlightBlock(block);
+                                    });
+                                    if (chatMessages) {
+                                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                                    }
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse JSON:', e, data);
+                            }
+                        }
+                    }
+                    return false;
+                }
+
+                function pump() {
+                    return reader.read().then(({done, value}) => {
+                        if (done) {
+                            if (buffer) processText(buffer);
+                            if (messageInput) {
+                                messageInput.disabled = false;
+                                messageInput.focus();
+                            }
+                            return;
+                        }
+
+                        buffer += decoder.decode(value, {stream: true});
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (processText(line)) {
+                                reader.cancel();
+                                if (messageInput) {
+                                    messageInput.disabled = false;
+                                    messageInput.focus();
+                                }
+                                return;
+                            }
+                        }
+
+                        return pump();
+                    });
+                }
+
+                return pump();
+            }).catch(error => {
+                console.error('Streaming error:', error);
+                responseBubble.innerHTML = formatMarkdown('An error occurred while streaming the response. Please try again.');
+                if (messageInput) {
+                    messageInput.disabled = false;
+                    messageInput.focus();
+                }
+            });
+        }
+
+
+        function handleNormalResponse(message) {
+            fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    api: document.getElementById('api-select').value,
+                    chatId: currentChatId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    appendMessage(`Error: ${data.error}`);
+                } else {
+                    appendMessage(data.response);
+                }
+                messageInput.disabled = false;
+                messageInput.focus();
+            })
+            .catch(error => {
+                appendMessage('An error occurred. Please try again.');
+                messageInput.disabled = false;
+                messageInput.focus();
+            });
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'bg-red-50 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-r-lg shadow-sm message-animation';
+            errorDiv.textContent = message;
+            const chatMessages = document.getElementById('chat-messages');
+            chatMessages.parentNode.insertBefore(errorDiv, chatMessages);
+            setTimeout(() => {
+                errorDiv.style.animation = 'slideIn 0.3s reverse';
+                setTimeout(() => errorDiv.remove(), 300);
+            }, 4700);
+        }
+
         function clearChat() {
-            if (!confirm('Are you sure you want to clear the chat and remove the uploaded document?')) return;
+            if (!confirm('Are you sure you want to clear the chat and remove all uploaded files?')) return;
 
             fetch('/clear-chat', {
-                method: 'POST',
+                method: 'POST'
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    window.location.href = '/';
+                    document.getElementById('file-list').innerHTML = '';
+                    document.getElementById('chat-messages').innerHTML = '';
+                    document.getElementById('file-input').value = '';
+                    // Reset chats
+                    chats = [{
+                        id: 'chat-1',
+                        messages: [],
+                        files: []
+                    }];
+                    document.getElementById('chat-tabs').innerHTML = `
+                        <button onclick="createNewChat()" class="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                            </svg>
+                            New Chat
+                        </button>
+                    `;
+                    addChatTab('chat-1');
+                    switchToChat('chat-1');
                 }
             })
             .catch(error => {
-                alert('Failed to clear chat. Please try again.');
+                showError('Failed to clear chat. Please try again.');
             });
         }
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with Document</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-lg">
-            <!-- Header -->
-            <div class="border-b p-4 flex justify-between items-center">
-                <h1 class="text-xl font-semibold">Document Chat</h1>
-                <div class="flex space-x-4 items-center">
-                    <select id="api-select" class="border rounded px-3 py-1">
-                        {% for api in apis %}
-                        <option value="{{ api }}">{{ api|title }}</option>
-                        {% endfor %}
-                    </select>
-                    <label class="flex items-center">
-                        <input type="checkbox" id="stream-toggle" class="mr-2" checked>
-                        Stream
-                    </label>
-                    <button onclick="clearChat()" class="text-red-600 hover:text-red-800">
-                        Clear Chat
-                    </button>
-                </div>
-            </div>
 
-            <!-- Chat Messages -->
-            <div id="chat-messages" class="h-[500px] overflow-y-auto p-4 space-y-4">
-                <!-- Messages will be inserted here -->
-            </div>
-
-            <!-- Input Area -->
-            <div class="border-t p-4">
-                <div class="flex space-x-4">
-                    <input type="text" id="message-input"
-                           class="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                           placeholder="Type your message...">
-                    <button onclick="sendMessage()"
-                            class="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition-colors">
-                        Send
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const messageInput = document.getElementById('message-input');
-        const chatMessages = document.getElementById('chat-messages');
-        const apiSelect = document.getElementById('api-select');
-
-        messageInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
-
-        function appendMessage(content, isUser = false) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
-
-            const messageBubble = document.createElement('div');
-            messageBubble.className = `max-w-[70%] rounded-lg p-3 ${
-                isUser ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-800'
-            }`;
-
-            if (isUser) {
-                messageBubble.textContent = content;
-            } else {
-                messageBubble.id = 'current-response';
-                const streamContent = document.createElement('span');
-                streamContent.textContent = content;
-                messageBubble.appendChild(streamContent);
-            }
-
-            messageDiv.appendChild(messageBubble);
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-            return messageBubble;
-        }
-
-        function sendMessage() {
-            const message = messageInput.value.trim();
-            if (!message) return;
-
-            const streamMode = document.getElementById('stream-toggle').checked;
-            appendMessage(message, true);
-            messageInput.value = '';
-            messageInput.disabled = true;
-
-            if (streamMode) {
-                // Streaming mode
-                const responseBubble = appendMessage('', false);
-
-                fetch('/chat/stream', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        message: message,
-                        api: apiSelect.value
-                    })
-                }).then(response => {
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
-
-                    function processText(text) {
-                        const lines = text.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const data = line.slice(6);
-                                if (data !== '[DONE]') {
-                                    try {
-                                        const parsed = JSON.parse(data);
-                                        if (parsed.content) {
-                                            responseBubble.textContent += parsed.content;
-                                            chatMessages.scrollTop = chatMessages.scrollHeight;
-                                        }
-                                    } catch (e) {
-                                        console.error('Failed to parse JSON:', e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    function pump() {
-                        return reader.read().then(({done, value}) => {
-                            if (done) {
-                                if (buffer) {
-                                    processText(buffer);
-                                }
-                                messageInput.disabled = false;
-                                messageInput.focus();
-                                return;
-                            }
-
-                            buffer += decoder.decode(value, {stream: true});
-                            const lines = buffer.split('\n\n');
-                            buffer = lines.pop();
-
-                            for (const line of lines) {
-                                processText(line);
-                            }
-
-                            return pump();
-                        });
-                    }
-
-                    return pump();
-                }).catch(error => {
-                    console.error('Streaming error:', error);
-                    responseBubble.textContent = 'An error occurred while streaming the response.';
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                });
-            } else {
-                // Non-streaming mode
-                fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        message: message,
-                        api: apiSelect.value
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        appendMessage(`Error: ${data.error}`);
-                    } else {
-                        appendMessage(data.response);
-                    }
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                })
-                .catch(error => {
-                    appendMessage('An error occurred. Please try again.');
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                });
-            }
-        }
-
-        function clearChat() {
-            if (!confirm('Are you sure you want to clear the chat and remove the uploaded document?')) return;
-
-            fetch('/clear-chat', {
-                method: 'POST',
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    window.location.href = '/';
+        function clearFiles() {
+            const chat = chats.find(c => c.id === currentChatId);
+            if (chat) {
+                chat.files = [];
+                const fileList = document.getElementById('file-list');
+                if (fileList) {
+                    fileList.innerHTML = '';
                 }
-            })
-            .catch(error => {
-                alert('Failed to clear chat. Please try again.');
-            });
+                updateFileCount(0);
+            }
         }
     </script>
 </body>
