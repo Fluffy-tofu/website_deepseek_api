@@ -7,6 +7,11 @@ import hashlib
 import shutil
 from document_processor import DocumentProcessor
 from dotenv import load_dotenv
+from chat_manager import ChatManager
+from chat_storage import ChatStorage
+from file_manager import FileManager
+from file_cache import file_cache
+
 
 load_dotenv()
 
@@ -16,6 +21,61 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_PDF_SIZE', 16 * 1024 * 1024))  # Default 16MB
 ALLOWED_EXTENSIONS = {'pdf', 'txt', 'doc', 'docx'}
 
+chat_storage = ChatStorage()
+file_manager = FileManager(app.config['UPLOAD_FOLDER'])
+
+# Simplified user management (for demo purposes)
+USERS = {
+    'user1': 'password1',
+    'user2': 'password2',
+    'user3': 'password3',
+    'user4': 'password4',
+    'user5': 'password5'
+}
+
+@app.route('/')
+def index():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    return redirect(url_for('chat_interface'))
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if username in USERS and USERS[username] == password:
+            session['user_id'] = username
+            return redirect(url_for('chat_interface'))
+
+        return render_template('login.html', error='Invalid credentials')
+
+    return render_template('login.html')
+
+@app.before_request
+def before_request():
+    if 'chats' not in session:
+        session['chats'] = {
+            'chat-1': {
+                'messages': [],
+                'files': []
+            }
+        }
+        session.modified = True
+
+@app.route('/debug/routes')
+def list_routes():
+    """List all registered routes for debugging"""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'path': str(rule)
+        })
+    return jsonify(routes)
 
 # Load and parse API keys from .env
 def load_api_configs():
@@ -65,48 +125,8 @@ def load_api_configs():
         }
     }
 
-class FileCache:
-    def __init__(self, cache_dir='file_cache'):
-        self.cache_dir = cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
 
-    def get_cache_path(self, filename):
-        # Create a unique cache key based on filename and last modification time
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        if os.path.exists(file_path):
-            mtime = os.path.getmtime(file_path)
-            cache_key = f"{filename}_{mtime}"
-            hash_key = hashlib.md5(cache_key.encode()).hexdigest()
-            return os.path.join(self.cache_dir, f"{hash_key}.txt")
-        return None
-
-    def get(self, filename):
-        cache_path = self.get_cache_path(filename)
-        if cache_path and os.path.exists(cache_path):
-            try:
-                with open(cache_path, 'r', encoding='utf-8') as f:
-                    return f.read()
-            except Exception as e:
-                app.logger.error(f"Cache read error: {str(e)}")
-        return None
-
-    def set(self, filename, content):
-        cache_path = self.get_cache_path(filename)
-        if cache_path:
-            try:
-                with open(cache_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            except Exception as e:
-                app.logger.error(f"Cache write error: {str(e)}")
-
-    def clear(self):
-        try:
-            for file in os.listdir(self.cache_dir):
-                os.remove(os.path.join(self.cache_dir, file))
-        except Exception as e:
-            app.logger.error(f"Cache clear error: {str(e)}")
-
-file_cache = FileCache()
+chat_manager = ChatManager(app.config['UPLOAD_FOLDER'], file_cache)
 
 # Initialize API configurations
 API_CONFIGS = load_api_configs()
@@ -125,7 +145,7 @@ clean_upload_folder()
 
 
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf', 'txt', 'doc', 'docx'}
 
 
 def create_upload_directory():
@@ -237,8 +257,41 @@ def get_api_response(api_name, messages, context="", stream=False):
         return {"error": f"API request failed: {str(e)}"}
 
 
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files['file']
+    chat_id = request.form.get('chatId', 'chat-1')
+
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "File type not allowed"}), 400
+
+    base_filename = secure_filename(file.filename)
+    unique_filename = f"{chat_id}_{base_filename}"
+
+    if file_manager.save_file(file, unique_filename):
+        chat_storage.add_file(session['user_id'], chat_id, unique_filename, base_filename)
+        return jsonify({
+            "success": True,
+            "filename": unique_filename,
+            "displayName": base_filename
+        })
+
+    return jsonify({"error": "Failed to save file"}), 500
+
 @app.route('/', methods=['GET', 'POST'])
 def home():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
     if request.method == 'POST':
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
@@ -249,106 +302,72 @@ def home():
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
 
-        if not allowed_file(file.filename):
-            return jsonify({
-                "error": f"Invalid file type. Allowed types are: {', '.join(ALLOWED_EXTENSIONS)}"
-            }), 400
+        base_filename = secure_filename(file.filename)
+        unique_filename = f"{chat_id}_{base_filename}"
 
-        try:
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        # Save file
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
 
-            file.save(filepath)
+        # Add file to chat storage
+        chat_storage.add_file(session['user_id'], chat_id, unique_filename, base_filename)
 
-            # Initialize chat storage
-            if 'chats' not in session:
-                session['chats'] = {}
-            if chat_id not in session['chats']:
-                session['chats'][chat_id] = {'messages': [], 'files': []}
-            if 'files' not in session['chats'][chat_id]:
-                session['chats'][chat_id]['files'] = []
-
-            # Add file to chat's files list
-            if filename not in session['chats'][chat_id]['files']:
-                session['chats'][chat_id]['files'].append(filename)
-                session.modified = True
-
-            # Process file and store in cache
-            try:
-                processor = DocumentProcessor(filepath)
-                content = processor.extract_text()
-                if content:
-                    file_cache.set(filename, content)
-            except Exception as e:
-                app.logger.error(f"Error processing file content: {str(e)}")
-
-            return jsonify({
-                "success": True,
-                "filename": filename,
-                "chatId": chat_id
-            })
-
-        except Exception as e:
-            app.logger.error(f"Error saving file: {str(e)}")
-            return jsonify({"error": "Failed to save file"}), 500
+        return jsonify({
+            "success": True,
+            "filename": unique_filename,
+            "displayName": base_filename
+        })
 
     return render_template('index.html', apis=list(API_CONFIGS.keys()))
 
+
 @app.route('/remove-file/<filename>', methods=['POST'])
 def remove_file(filename):
-    try:
-        # Get chat ID from request body, default to 'chat-1' if not provided
-        data = request.get_json(silent=True) or {}
-        chat_id = data.get('chatId', 'chat-1')
+    data = request.get_json(silent=True) or {}
+    chat_id = data.get('chatId', 'chat-1')
 
-        # First try to remove the file from the filesystem
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(filename))
-        if os.path.exists(filepath):
-            os.remove(filepath)
-
-        # Then remove from session storage
-        if chat_id in session.get('chats', {}):
-            chat = session['chats'][chat_id]
-            if 'files' in chat and filename in chat['files']:
-                chat['files'].remove(filename)
-                session.modified = True
-
-        return jsonify({"success": True})
-    except Exception as e:
-        app.logger.error(f"Error removing file: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 400
+    result = chat_manager.remove_file(chat_id, filename)
+    if 'error' in result:
+        return jsonify({'error': result['error']}), 400
+    return jsonify({'success': True})
 
 
 @app.route('/chat', methods=['GET', 'POST'])
-def chat():
-    if request.method == 'POST':
-        data = request.get_json()
-        user_input = data.get('message', '')
-        api_name = data.get('api', 'deepseek-chat')
-        chat_id = data.get('chatId', 'chat-1')
+def chat_interface():  # This function name must match what's used in url_for()
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
 
-        context = get_chat_context(chat_id)
-        messages = [{"role": "user", "content": user_input}]
-        response = get_api_response(api_name, messages, context)
+    if request.method == 'GET':
+        return render_template('chat.html', apis=list(API_CONFIGS.keys()))
 
-        if response.get("response"):
-            if chat_id in session['chats']:
-                session['chats'][chat_id]['messages'].append({
-                    "content": user_input,
-                    "isUser": True
-                })
-                session['chats'][chat_id]['messages'].append({
-                    "content": response["response"],
-                    "isUser": False
-                })
-                session.modified = True
+    # Handle POST request for chat messages
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
 
-        return jsonify(response)
+    user_input = data.get('message', '')
+    api_name = data.get('api', 'deepseek-chat')
+    chat_id = data.get('chatId', 'chat-1')
 
-    return render_template('chat.html', apis=list(API_CONFIGS.keys()))
+    # Store user message
+    chat_manager.add_message(
+        chat_id,
+        user_input,
+        True
+    )
+
+    # Get API response
+    response = get_api_response(api_name, [{"role": "user", "content": user_input}])
+
+    if response.get("response"):
+        # Store AI response
+        chat_manager.add_message(
+            chat_id,
+            response["response"],
+            False
+        )
+
+    return jsonify(response)
+
 
 @app.teardown_appcontext
 def cleanup(error):
@@ -359,8 +378,10 @@ def cleanup(error):
 def chat_stream():
     try:
         app.logger.info("Starting chat stream request")
-        data = request.get_json()
+        if 'user_id' not in session:
+            return jsonify({"error": "Not authenticated"}), 401
 
+        data = request.get_json()
         if not data:
             app.logger.error("No JSON data received")
             return jsonify({"error": "No data received"}), 400
@@ -369,202 +390,248 @@ def chat_stream():
         api_name = data.get('api', 'deepseek-chat')
         chat_id = data.get('chatId', 'chat-1')
 
-        app.logger.info(f"Processing request - API: {api_name}, Chat ID: {chat_id}")
+        # Store user message
+        chat_storage.add_message(session['user_id'], chat_id, user_input, True)
 
         # Get file context for this chat
         try:
-            context = get_chat_context(chat_id)
+            # Get context using ChatStorage
+            context = chat_storage.get_context(session['user_id'], chat_id)
             app.logger.info(f"Context retrieved, length: {len(context)}")
         except Exception as e:
             app.logger.error(f"Error getting context: {str(e)}")
             return jsonify({"error": "Failed to get context"}), 500
 
-        # Construct messages
-        messages = [{
-            "role": "system",
-            "content": f"Here is the context from the uploaded documents:\n\n{context}"
-        }, {
-            "role": "user",
-            "content": user_input
-        }]
+        config = API_CONFIGS[api_name]
+        if not config['key']:
+            app.logger.error(f"No API key found for {api_name}")
+            return jsonify({"error": "API key not found"}), 500
 
-        app.logger.info("Initiating API request")
-        try:
-            config = API_CONFIGS[api_name]
-            if not config['key']:
-                app.logger.error(f"No API key found for {api_name}")
-                return jsonify({"error": "API key not found"}), 500
+        # Set up appropriate headers based on API type
+        headers = {
+            "Content-Type": "application/json"
+        }
 
-            headers = {
+        if config['type'] == 'openrouter':
+            headers.update({
                 "Authorization": f"Bearer {config['key']}",
-                "Content-Type": "application/json"
+                "HTTP-Referer": "http://localhost:5000",
+                "X-Title": "Local LLM Chat App"
+            })
+        elif config['type'] == 'openai':
+            headers.update({
+                "Authorization": f"Bearer {config['key']}"
+            })
+        elif config['type'] == 'anthropic':
+            headers.update({
+                "x-api-key": config['key'],
+                "anthropic-version": "2023-06-01"
+            })
+
+        # Prepare the payload based on API type
+        if config['type'] == 'anthropic':
+            payload = {
+                "model": config['model'],
+                "messages": [{
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion: {user_input}"
+                }],
+                "max_tokens": 4096,
+                "stream": True
+            }
+        else:
+            # For OpenAI and OpenRouter
+            messages = [{
+                "role": "system",
+                "content": f"Here is the context from the uploaded documents:\n\n{context}"
+            }, {
+                "role": "user",
+                "content": user_input
+            }]
+
+            payload = {
+                "model": config['model'],
+                "messages": messages,
+                "max_tokens": 4096,
+                "stream": True
             }
 
             if config['type'] == 'openrouter':
-                headers.update({
-                    "HTTP-Referer": "http://localhost:5000",
-                    "X-Title": "Local LLM Chat App"
+                payload.update({
+                    "temperature": 0.7,
+                    "top_p": 0.95,
+                    "provider": {
+                        "sort": "throughput",
+                        "allow_fallbacks": True,
+                        "require_parameters": True
+                    }
                 })
-            elif config['type'] == 'anthropic':
-                headers = {
-                    "x-api-key": config['key'],
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                }
 
-            # Prepare payload based on API type
-            if config['type'] == 'anthropic':
-                payload = {
-                    "model": config['model'],
-                    "messages": [{
-                        "role": "user",
-                        "content": f"Context:\n{context}\n\nQuestion: {user_input}"
-                    }],
-                    "max_tokens": 4096,
-                    "stream": True
-                }
-            else:
-                payload = {
-                    "model": config['model'],
-                    "messages": messages,
-                    "max_tokens": 4096,
-                    "stream": True
-                }
-                if config['type'] == 'openrouter':
-                    payload.update({
-                        "temperature": 0.7,
-                        "top_p": 0.95,
-                        "provider": {
-                            "sort": "throughput",
-                            "allow_fallbacks": True,
-                            "require_parameters": True
-                        }
-                    })
+        app.logger.info(f"Making request to {config['url']}")
+        response = requests.post(
+            config['url'],
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=30
+        )
 
-            app.logger.info(f"Making request to {config['url']}")
-            response = requests.post(
-                config['url'],
-                headers=headers,
-                json=payload,
-                stream=True,
-                timeout=30  # Add timeout
-            )
+        if response.status_code != 200:
+            app.logger.error(f"API error: {response.status_code} - {response.text}")
+            return jsonify({"error": f"API error: {response.status_code}"}), response.status_code
 
-            if response.status_code != 200:
-                app.logger.error(f"API error: {response.status_code} - {response.text}")
-                return jsonify({"error": f"API error: {response.status_code}"}), response.status_code
+        app.logger.info("Stream started successfully")
 
-            app.logger.info("Stream started successfully")
+        def generate():
+            full_response = ""
+            try:
+                for line in response.iter_lines():
+                    if line:
+                        try:
+                            line_text = line.decode('utf-8')
+                            if line_text.startswith('data: '):
+                                data = line_text[6:]
+                                if data == '[DONE]':
+                                    # Store the complete response in chat storage
+                                    chat_storage.add_message(
+                                        session['user_id'],
+                                        chat_id,
+                                        full_response,
+                                        False
+                                    )
+                                    yield f"data: [DONE]\n\n"
+                                    break
 
-            def generate():
-                try:
-                    for line in response.iter_lines():
-                        if line:
-                            try:
-                                line_text = line.decode('utf-8')
-                                if line_text.startswith('data: '):
-                                    data = line_text[6:]
-                                    if data == '[DONE]':
-                                        yield f"data: [DONE]\n\n"
-                                        break
+                                parsed_data = json.loads(data)
 
-                                    parsed_data = json.loads(data)
+                                # Handle different API response formats
+                                if config['type'] == 'anthropic':
+                                    content = parsed_data.get('delta', {}).get('text', '')
+                                else:
+                                    content = parsed_data.get('choices', [{}])[0].get('delta', {}).get('content', '')
 
-                                    # Handle different API response formats
-                                    if config['type'] == 'anthropic':
-                                        content = parsed_data.get('delta', {}).get('text', '')
-                                    else:
-                                        content = parsed_data.get('choices', [{}])[0].get('delta', {}).get('content',
-                                                                                                           '')
+                                if content:
+                                    full_response += content
+                                    yield f"data: {json.dumps({'content': content})}\n\n"
 
-                                    if content:
-                                        yield f"data: {json.dumps({'content': content})}\n\n"
+                        except json.JSONDecodeError as e:
+                            app.logger.error(f"JSON decode error: {str(e)} - Line: {line}")
+                            continue
+                        except Exception as e:
+                            app.logger.error(f"Error processing stream line: {str(e)}")
+                            continue
 
-                            except json.JSONDecodeError as e:
-                                app.logger.error(f"JSON decode error: {str(e)} - Line: {line}")
-                                continue
-                            except Exception as e:
-                                app.logger.error(f"Error processing stream line: {str(e)}")
-                                continue
+            except Exception as e:
+                app.logger.error(f"Stream processing error: {str(e)}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            finally:
+                response.close()
 
-                except Exception as e:
-                    app.logger.error(f"Stream processing error: {str(e)}")
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                finally:
-                    response.close()
-
-            return Response(generate(), mimetype='text/event-stream')
-
-        except requests.exceptions.RequestException as e:
-            app.logger.error(f"Request failed: {str(e)}")
-            return jsonify({"error": f"Request failed: {str(e)}"}), 500
+        return Response(generate(), mimetype='text/event-stream')
 
     except Exception as e:
         app.logger.error(f"Unexpected error in chat stream: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/chat/message', methods=['POST'])
+def chat_message():
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    user_input = data.get('message', '')
+    api_name = data.get('api', 'deepseek-chat')
+    chat_id = data.get('chatId', 'chat-1')
+
+    # Store user message
+    chat_storage.add_message(session['user_id'], chat_id, user_input, True)
+
+    # Get API response
+    response = get_api_response(api_name, [{"role": "user", "content": user_input}])
+
+    if response.get("response"):
+        chat_storage.add_message(
+            session['user_id'],
+            chat_id,
+            response["response"],
+            False
+        )
+
+    return jsonify(response)
+
 @app.route('/create-chat', methods=['POST'])
 def create_chat():
-    chat_id = f"chat-{len(session['chats']) + 1}"
-    session['chats'][chat_id] = {
-        'messages': [],
-        'files': []
-    }
-    session.modified = True
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    result = chat_storage.create_chat(session['user_id'])
     return jsonify({
         'success': True,
-        'chatId': chat_id
+        'chatId': result['chatId']
     })
 
 
 @app.route('/switch-chat/<chat_id>', methods=['GET'])
 def switch_chat(chat_id):
-    if chat_id not in session['chats']:
+    chat = chat_manager.get_chat(chat_id)
+    if not chat:
         return jsonify({'error': 'Chat not found'}), 404
 
     return jsonify({
         'success': True,
-        'chat': session['chats'][chat_id]
+        'chat': chat
+    })
+
+
+@app.route('/init-chats', methods=['GET'])
+def init_chats():
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    user_data = chat_storage.load_user_chats(session['user_id'])
+    return jsonify({
+        'success': True,
+        'chats': user_data['chats']
     })
 
 
 @app.route('/close-chat/<chat_id>', methods=['POST'])
 def close_chat(chat_id):
-    if chat_id not in session['chats']:
-        return jsonify({'error': 'Chat not found'}), 404
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
 
-    # Remove chat's files
-    for filename in session['chats'][chat_id].get('files', []):
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(filename))
-        if os.path.exists(filepath):
-            os.remove(filepath)
+    # Remove associated files
+    file_manager.clear_user_files(chat_id)
 
-    del session['chats'][chat_id]
-    session.modified = True
+    # Delete chat data
+    success = chat_storage.delete_chat(session['user_id'], chat_id)
+    if not success:
+        return jsonify({'error': 'Failed to delete chat'}), 400
+
     return jsonify({'success': True})
 
 
 @app.route('/clear-chat', methods=['POST'])
 def clear_chat():
-    try:
-        # Clear all uploaded files
-        clean_upload_folder()
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
 
-        # Reset session chats
-        session['chats'] = {
-            'chat-1': {
-                'messages': [],
-                'files': []
-            }
-        }
-        session.modified = True
+    data = request.get_json()
+    chat_id = data.get('chatId', 'chat-1')
 
-        return jsonify({"success": True})
-    except Exception as e:
-        app.logger.error(f"Error clearing chat: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+    # Clear files associated with this chat
+    file_manager.clear_user_files(chat_id)
 
+    # Clear chat data
+    success = chat_storage.clear_chat(session['user_id'], chat_id)
+    if not success:
+        return jsonify({'error': 'Failed to clear chat'}), 400
+
+    return jsonify({'success': True})
 
 
 # Modified get_chat_context function

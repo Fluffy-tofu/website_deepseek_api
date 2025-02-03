@@ -199,11 +199,16 @@
             }
         });
 
-        let chats = [{
-            id: 'chat-1',
-            messages: [],
-            files: []
-        }];
+
+        let chatStates = {
+            'chat-1': {
+                messages: [],
+                files: [],
+                currentStream: null,
+                pendingResponse: null
+            }
+        };
+
         let currentChatId = 'chat-1';
 
         // Initialize event listeners and UI
@@ -224,25 +229,48 @@
             fileInput.addEventListener('change', handleFileUpload);
         });
 
-        // Chat management functions
         function createNewChat() {
-            const chatId = `chat-${chats.length + 1}`;
-            chats.push({
-                id: chatId,
-                messages: [],
-                files: []
+            fetch('/create-chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.chatId) {
+                    // Initialize new chat state with the ID from the server
+                    chatStates[data.chatId] = {
+                        messages: [],
+                        files: [],
+                        currentStream: null,
+                        pendingResponse: null
+                    };
+
+                    addChatTab(data.chatId);
+                    switchToChat(data.chatId);
+                } else {
+                    throw new Error(data.error || 'Failed to create chat');
+                }
+            })
+            .catch(error => {
+                console.error('Error creating new chat:', error);
+                showError('Failed to create new chat');
             });
-            addChatTab(chatId);
-            switchToChat(chatId);
         }
 
         function addChatTab(chatId) {
             const tabsContainer = document.getElementById('chat-tabs');
+            if (!tabsContainer) {
+                console.error('Chat tabs container not found');
+                return;
+            }
+
             const tab = document.createElement('div');
             tab.className = 'flex items-center px-4 py-2 bg-gray-100 rounded-lg mr-2 cursor-pointer';
             tab.innerHTML = `
                 <span class="mr-2">Chat ${chatId.split('-')[1]}</span>
-                <button onclick="closeChat('${chatId}')" class="text-gray-500 hover:text-red-500">
+                <button onclick="closeChat('${chatId}', event)" class="text-gray-500 hover:text-red-500">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                     </svg>
@@ -250,35 +278,80 @@
             `;
             tab.setAttribute('data-chat-id', chatId);
             tab.onclick = (e) => {
-                if (e.target === tab || e.target.tagName !== 'BUTTON') {
+                const closeButton = e.target.closest('button');
+                if (!closeButton) {
                     switchToChat(chatId);
                 }
             };
-            tabsContainer.insertBefore(tab, tabsContainer.lastElementChild);
+
+            // Find the New Chat button by its specific characteristics
+            const newChatButton = Array.from(tabsContainer.children).find(child =>
+                child.tagName === 'BUTTON' &&
+                child.textContent.trim().includes('New Chat')
+            );
+
+            // If we found the New Chat button, insert before it, otherwise append to the end
+            if (newChatButton) {
+                tabsContainer.insertBefore(tab, newChatButton);
+            } else {
+                // If we can't find the New Chat button, just append the new tab
+                tabsContainer.appendChild(tab);
+
+                // Re-create the New Chat button if it's missing
+                const newButton = document.createElement('button');
+                newButton.className = 'px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg flex items-center';
+                newButton.onclick = createNewChat;
+                newButton.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    New Chat
+                `;
+                tabsContainer.appendChild(newButton);
+            }
+
+            updateActiveTabStyle(chatId);
         }
 
         function switchToChat(chatId) {
-            currentChatId = chatId;
-            const chat = chats.find(c => c.id === chatId);
+            // Cancel any ongoing stream in the current chat
+            if (chatStates[currentChatId]?.currentStream) {
+                chatStates[currentChatId].currentStream.abort();
+                chatStates[currentChatId].currentStream = null;
+            }
 
-            if (!chat) return;
+            currentChatId = chatId;
+
+            // Initialize chat state if it doesn't exist
+            if (!chatStates[chatId]) {
+                chatStates[chatId] = {
+                    messages: [],
+                    files: [],
+                    currentStream: null,
+                    pendingResponse: null
+                };
+            }
 
             // Update UI to show current chat's messages
             const chatMessages = document.getElementById('chat-messages');
             chatMessages.innerHTML = '';
-            chat.messages.forEach(msg => {
+
+            // Render all messages for this chat
+            chatStates[chatId].messages.forEach(msg => {
                 appendMessage(msg.content, msg.isUser);
             });
+
+            // If there's a pending response, render it
+            if (chatStates[chatId].pendingResponse) {
+                appendMessage(chatStates[chatId].pendingResponse, false);
+            }
 
             // Update files panel
             const fileList = document.getElementById('file-list');
             fileList.innerHTML = '';
-            if (chat.files && chat.files.length > 0) {
-                chat.files.forEach(filename => {
-                    addFileToPreview(filename);
-                });
-                updateFileCount(0); // Update count without incrementing
-            }
+            chatStates[chatId].files.forEach(file => {
+                addFileToPreview(file.displayName || file.name, file.name);
+            });
 
             // Update active tab styling
             document.querySelectorAll('#chat-tabs > div').forEach(tab => {
@@ -292,20 +365,65 @@
             });
         }
 
-        function closeChat(chatId) {
-            if (chats.length <= 1) return; // Don't close the last chat
 
-            const index = chats.findIndex(c => c.id === chatId);
-            chats.splice(index, 1);
-
-            // Remove tab
-            const tab = document.querySelector(`[data-chat-id="${chatId}"]`);
-            tab.remove();
-
-            // Switch to another chat if closing current
-            if (currentChatId === chatId) {
-                switchToChat(chats[0].id);
+        function closeChat(chatId, event) {
+            // Prevent the click from triggering the chat switch
+            if (event) {
+                event.stopPropagation();
             }
+
+            console.log('Attempting to close chat:', chatId); // Debug log
+
+            if (Object.keys(chatStates).length <= 1) {
+                showError("Cannot delete the last chat");
+                return;
+            }
+
+            // Find another chat to switch to before closing this one
+            const otherChatId = Object.keys(chatStates).find(id => id !== chatId);
+
+            // Construct the URL carefully
+            const url = `/close-chat/${encodeURIComponent(chatId)}`;
+            console.log('Sending request to:', url); // Debug log
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'same-origin' // Include cookies
+            })
+            .then(response => {
+                console.log('Response status:', response.status); // Debug log
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Response data:', data); // Debug log
+                if (data.success) {
+                    // Remove chat state
+                    delete chatStates[chatId];
+
+                    // Remove tab from UI
+                    const tab = document.querySelector(`[data-chat-id="${chatId}"]`);
+                    if (tab) {
+                        tab.remove();
+                    }
+
+                    // If we closed the current chat, switch to another one
+                    if (chatId === currentChatId && otherChatId) {
+                        switchToChat(otherChatId);
+                    }
+                } else {
+                    throw new Error(data.error || 'Failed to close chat');
+                }
+            })
+            .catch(error => {
+                console.error('Error closing chat:', error);
+                showError(error.message || 'Failed to close chat');
+            });
         }
 
         function handleFileUpload(event) {
@@ -317,26 +435,28 @@
                 formData.append('file', file);
                 formData.append('chatId', currentChatId);
 
-                fetch('/', {
+                fetch('/upload', {
                     method: 'POST',
                     body: formData
                 })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        addFileToPreview(data.filename);
-                        updateFileCount(1);
+                        // Store both the actual filename and display name
+                        chatStates[currentChatId].files.push({
+                            name: data.filename,
+                            displayName: data.displayName
+                        });
+
+                        addFileToPreview(data.displayName, data.filename);
 
                         // Add status message to chat
-                        const statusMessage = `File "${data.filename}" has been uploaded and added to the context.`;
+                        const statusMessage = `File "${data.displayName}" has been uploaded and added to the context.`;
                         appendMessage(statusMessage, false);
-
-                        // Save file to chat's files list
-                        const chat = chats.find(c => c.id === currentChatId);
-                        if (chat) {
-                            if (!chat.files) chat.files = [];
-                            chat.files.push(data.filename);
-                        }
+                        chatStates[currentChatId].messages.push({
+                            content: statusMessage,
+                            isUser: false
+                        });
                     } else {
                         showError(data.error || 'Failed to upload file');
                     }
@@ -346,6 +466,9 @@
                     console.error('Upload error:', error);
                 });
             });
+
+            // Clear the file input
+            event.target.value = '';
         }
 
         function updateFileCount(change) {
@@ -361,22 +484,22 @@
             }
         }
 
-        function addFileToPreview(filename) {
+        function addFileToPreview(displayName, actualFilename) {
             const fileList = document.getElementById('file-list');
             if (!fileList) return;
 
             const fileDiv = document.createElement('div');
             fileDiv.className = 'flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm';
-            fileDiv.dataset.filename = filename;
+            fileDiv.dataset.filename = actualFilename;
 
             fileDiv.innerHTML = `
                 <div class="flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
                     </svg>
-                    <span class="text-sm text-gray-700 truncate">${filename}</span>
+                    <span class="text-sm text-gray-700 truncate">${displayName}</span>
                 </div>
-                <button onclick="removeFile('${filename}')" class="text-gray-400 hover:text-red-500 transition-colors">
+                <button onclick="removeFile('${actualFilename}')" class="text-gray-400 hover:text-red-500 transition-colors">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                     </svg>
@@ -399,14 +522,18 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    // Remove file from UI
                     const fileElements = document.querySelectorAll('#file-list > div');
                     fileElements.forEach(el => {
-                        const fileSpan = el.querySelector('span');
-                        if (fileSpan && fileSpan.textContent === filename) {
+                        if (el.dataset.filename === filename) {
                             el.remove();
-                            updateFileCount(-1);
                         }
                     });
+
+                    // Remove file from chat state
+                    chatStates[currentChatId].files = chatStates[currentChatId].files.filter(
+                        f => f.name !== filename
+                    );
                 } else {
                     console.error('Failed to remove file:', data.error);
                 }
@@ -486,6 +613,10 @@
             const responseBubble = appendMessage('', false);
             let fullResponse = '';
 
+            // Create AbortController for the stream
+            const controller = new AbortController();
+            chatStates[currentChatId].currentStream = controller;
+
             fetch('/chat/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -493,8 +624,10 @@
                     message: message,
                     api: document.getElementById('api-select').value,
                     chatId: currentChatId
-                })
-            }).then(response => {
+                }),
+                signal: controller.signal
+            })
+            .then(response => {
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -508,6 +641,12 @@
                         if (line.startsWith('data: ')) {
                             const data = line.slice(6);
                             if (data === '[DONE]') {
+                                // Store the complete response in chat state
+                                chatStates[currentChatId].messages.push({
+                                    content: fullResponse,
+                                    isUser: false
+                                });
+                                chatStates[currentChatId].pendingResponse = null;
                                 return true;
                             }
                             try {
@@ -519,6 +658,8 @@
                                 if (parsed.content) {
                                     fullResponse += parsed.content;
                                     responseBubble.innerHTML = formatMarkdown(fullResponse);
+                                    // Store the partial response
+                                    chatStates[currentChatId].pendingResponse = fullResponse;
                                     responseBubble.querySelectorAll('pre code').forEach((block) => {
                                         hljs.highlightBlock(block);
                                     });
@@ -542,6 +683,7 @@
                                 messageInput.disabled = false;
                                 messageInput.focus();
                             }
+                            chatStates[currentChatId].currentStream = null;
                             return;
                         }
 
@@ -556,28 +698,51 @@
                                     messageInput.disabled = false;
                                     messageInput.focus();
                                 }
+                                chatStates[currentChatId].currentStream = null;
                                 return;
                             }
                         }
 
                         return pump();
+                    })
+                    .catch(error => {
+                        console.error('Error in pump:', error);
+                        if (messageInput) {
+                            messageInput.disabled = false;
+                            messageInput.focus();
+                        }
+                        chatStates[currentChatId].currentStream = null;
                     });
                 }
 
                 return pump();
-            }).catch(error => {
-                console.error('Streaming error:', error);
-                responseBubble.innerHTML = formatMarkdown('An error occurred while streaming the response. Please try again.');
+            })
+            .catch(error => {
+                if (error.name === 'AbortError') {
+                    console.log('Stream was cancelled');
+                } else {
+                    console.error('Streaming error:', error);
+                    responseBubble.innerHTML = formatMarkdown('An error occurred while streaming the response. Please try again.');
+                }
                 if (messageInput) {
                     messageInput.disabled = false;
                     messageInput.focus();
                 }
+                chatStates[currentChatId].currentStream = null;
+            })
+            .finally(() => {
+                // Ensure cleanup happens even if there's an error
+                if (messageInput) {
+                    messageInput.disabled = false;
+                    messageInput.focus();
+                }
+                chatStates[currentChatId].currentStream = null;
             });
         }
 
 
         function handleNormalResponse(message) {
-            fetch('/chat', {
+            fetch('/chat/message', {  // Changed from '/chat' to '/chat/message'
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -588,16 +753,24 @@
             })
             .then(response => response.json())
             .then(data => {
+                const messageInput = document.getElementById('message-input');
                 if (data.error) {
-                    appendMessage(`Error: ${data.error}`);
+                    appendMessage(`Error: ${data.error}`, false);
                 } else {
-                    appendMessage(data.response);
+                    appendMessage(data.response, false);
+                    // Store the response in chat state
+                    chatStates[currentChatId].messages.push({
+                        content: data.response,
+                        isUser: false
+                    });
                 }
                 messageInput.disabled = false;
                 messageInput.focus();
             })
             .catch(error => {
-                appendMessage('An error occurred. Please try again.');
+                console.error('Chat error:', error);
+                appendMessage('An error occurred. Please try again.', false);
+                const messageInput = document.getElementById('message-input');
                 messageInput.disabled = false;
                 messageInput.focus();
             });
@@ -605,48 +778,50 @@
 
         function showError(message) {
             const errorDiv = document.createElement('div');
-            errorDiv.className = 'bg-red-50 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-r-lg shadow-sm message-animation';
+            errorDiv.className = 'bg-red-50 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-r-lg shadow-sm message-animation fixed top-4 right-4 z-50';
             errorDiv.textContent = message;
-            const chatMessages = document.getElementById('chat-messages');
-            chatMessages.parentNode.insertBefore(errorDiv, chatMessages);
+            document.body.appendChild(errorDiv);
+
             setTimeout(() => {
                 errorDiv.style.animation = 'slideIn 0.3s reverse';
                 setTimeout(() => errorDiv.remove(), 300);
-            }, 4700);
+            }, 4000);
         }
 
         function clearChat() {
             if (!confirm('Are you sure you want to clear the chat and remove all uploaded files?')) return;
 
             fetch('/clear-chat', {
-                method: 'POST'
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    chatId: currentChatId
+                })
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    // Clear current chat state
+                    chatStates[currentChatId] = {
+                        messages: [],
+                        files: [],
+                        currentStream: null,
+                        pendingResponse: null
+                    };
+
+                    // Clear UI
                     document.getElementById('file-list').innerHTML = '';
                     document.getElementById('chat-messages').innerHTML = '';
                     document.getElementById('file-input').value = '';
-                    // Reset chats
-                    chats = [{
-                        id: 'chat-1',
-                        messages: [],
-                        files: []
-                    }];
-                    document.getElementById('chat-tabs').innerHTML = `
-                        <button onclick="createNewChat()" class="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg flex items-center">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                            </svg>
-                            New Chat
-                        </button>
-                    `;
-                    addChatTab('chat-1');
-                    switchToChat('chat-1');
+                } else {
+                    showError(data.error || 'Failed to clear chat');
                 }
             })
             .catch(error => {
-                showError('Failed to clear chat. Please try again.');
+                console.error('Error clearing chat:', error);
+                showError('Failed to clear chat');
             });
         }
 
@@ -661,6 +836,168 @@
                 updateFileCount(0);
             }
         }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // First get the initial chat state from the server
+            fetch('/init-chats')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Clear existing chat tabs
+                        const tabsContainer = document.getElementById('chat-tabs');
+                        // Keep only the "New Chat" button
+                        tabsContainer.innerHTML = `
+                            <button onclick="createNewChat()" class="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                                New Chat
+                            </button>
+                        `;
+
+                        // Initialize chat states from server data
+                        chatStates = {};
+                        Object.keys(data.chats).forEach(chatId => {
+                            // Initialize chat state with messages and files from server
+                            chatStates[chatId] = {
+                                messages: data.chats[chatId].messages || [],
+                                files: data.chats[chatId].files || [],
+                                currentStream: null,
+                                pendingResponse: null
+                            };
+
+                            // Create the chat tab
+                            addChatTab(chatId);
+                        });
+
+                        // Switch to the first chat if it exists
+                        const firstChatId = Object.keys(chatStates)[0];
+                        if (firstChatId) {
+                            switchToChat(firstChatId);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error initializing chats:', error);
+                    showError('Failed to initialize chats');
+                });
+
+            // Setup event listeners
+            const messageInput = document.getElementById('message-input');
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            const fileInput = document.getElementById('file-input');
+            fileInput.addEventListener('change', handleFileUpload);
+
+            // Add stream toggle listener
+            const streamToggle = document.getElementById('stream-toggle');
+            if (streamToggle) {
+                streamToggle.addEventListener('change', function() {
+                    if (!this.checked && chatStates[currentChatId]?.currentStream) {
+                        chatStates[currentChatId].currentStream.abort();
+                        chatStates[currentChatId].currentStream = null;
+                    }
+                });
+            }
+        });
+
+        function formatMarkdown(content) {
+            try {
+                // Configure marked for code highlighting
+                marked.setOptions({
+                    highlight: function(code, lang) {
+                        if (lang && hljs.getLanguage(lang)) {
+                            try {
+                                return hljs.highlight(code, { language: lang }).value;
+                            } catch (e) { }
+                        }
+                        try {
+                            return hljs.highlightAuto(code).value;
+                        } catch (e) { }
+                        return code;
+                    },
+                    breaks: true,
+                    gfm: true
+                });
+
+                return marked.parse(content);
+            } catch (e) {
+                console.error('Markdown parsing error:', e);
+                return content;
+            }
+        }
+
+        function isInViewport(element) {
+            const rect = element.getBoundingClientRect();
+            return (
+                rect.top >= 0 &&
+                rect.left >= 0 &&
+                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+            );
+        }
+
+        function appendMessage(content, isUser = false) {
+            const chatMessages = document.getElementById('chat-messages');
+            if (!chatMessages) {
+                console.error('Chat messages container not found');
+                return null;
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'} message-animation`;
+
+            const messageBubble = document.createElement('div');
+            messageBubble.className = `max-w-[80%] rounded-lg p-4 ${
+                isUser ? 'bg-blue-500 text-white shadow-sm' : 'bg-white text-gray-800 shadow-sm markdown-content'
+            }`;
+
+            if (isUser) {
+                messageBubble.textContent = content;
+                // Store user message in chat state
+                chatStates[currentChatId].messages.push({
+                    content: content,
+                    isUser: true
+                });
+            } else {
+                messageBubble.innerHTML = formatMarkdown(content);
+                messageBubble.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightBlock(block);
+                });
+                // Only store non-user messages if they're not temporary (streaming) responses
+                if (!chatStates[currentChatId].pendingResponse) {
+                    chatStates[currentChatId].messages.push({
+                        content: content,
+                        isUser: false
+                    });
+                }
+            }
+
+            messageDiv.appendChild(messageBubble);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            return messageBubble;
+        }
+
+        function updateActiveTabStyle(activeChatId) {
+            const tabs = document.querySelectorAll('[data-chat-id]');
+            tabs.forEach(tab => {
+                if (tab.getAttribute('data-chat-id') === activeChatId) {
+                    tab.classList.remove('bg-gray-100');
+                    tab.classList.add('bg-blue-100');
+                } else {
+                    tab.classList.remove('bg-blue-100');
+                    tab.classList.add('bg-gray-100');
+                }
+            });
+        }
+
     </script>
 </body>
 </html>
