@@ -9,20 +9,27 @@ class FileManager:
         self.upload_folder = upload_folder
         os.makedirs(upload_folder, exist_ok=True)
 
-    def save_file(self, file, filename: str) -> bool:
-        """Save an uploaded file"""
+    def get_user_directory(self, user_id: str) -> str:
+        """Get the upload directory for a specific user"""
+        user_dir = os.path.join(self.upload_folder, user_id)
+        os.makedirs(user_dir, exist_ok=True)
+        return user_dir
+
+    def save_file(self, file, filename: str, user_id: str) -> bool:
+        """Save an uploaded file to the user's directory"""
         try:
-            filepath = os.path.join(self.upload_folder, secure_filename(filename))
+            user_dir = self.get_user_directory(user_id)
+            filepath = os.path.join(user_dir, secure_filename(filename))
             file.save(filepath)
             return True
         except Exception as e:
             print(f"Error saving file: {e}")
             return False
 
-    def delete_file(self, filename: str) -> bool:
-        """Delete a file from the uploads folder"""
+    def delete_file(self, filename: str, user_id: str) -> bool:
+        """Delete a file from the user's directory"""
         try:
-            filepath = os.path.join(self.upload_folder, secure_filename(filename))
+            filepath = os.path.join(self.upload_folder, user_id, secure_filename(filename))
             if os.path.exists(filepath):
                 os.remove(filepath)
             return True
@@ -30,37 +37,36 @@ class FileManager:
             print(f"Error deleting file: {e}")
             return False
 
-    def get_file_path(self, filename: str) -> Optional[str]:
-        """Get the full path of a file"""
-        filepath = os.path.join(self.upload_folder, secure_filename(filename))
+    def get_file_path(self, filename: str, user_id: str) -> Optional[str]:
+        """Get the full path of a file in the user's directory"""
+        filepath = os.path.join(self.upload_folder, user_id, secure_filename(filename))
         return filepath if os.path.exists(filepath) else None
 
-    def clear_user_files(self, chat_id: str) -> bool:
-        """Delete all files associated with a specific chat"""
+    def clear_user_files(self, chat_id: str, user_id: str) -> bool:
+        """Delete all files associated with a specific chat for a user"""
         try:
+            user_dir = self.get_user_directory(user_id)
             pattern = f"{chat_id}_*"
-            for filename in os.listdir(self.upload_folder):
+            for filename in os.listdir(user_dir):
                 if filename.startswith(f"{chat_id}_"):
-                    os.remove(os.path.join(self.upload_folder, filename))
+                    os.remove(os.path.join(user_dir, filename))
             return True
         except Exception as e:
             print(f"Error clearing files: {e}")
             return False
 
-    def cleanup_old_files(self, active_files: List[str]) -> None:
-        """Remove any files in the upload folder that aren't in the active_files list"""
+    def get_file_size(self, filename: str, user_id: str) -> Optional[int]:
+        """Get the size of a file in the user's directory"""
         try:
-            active_files = set(secure_filename(f) for f in active_files)
-            for filename in os.listdir(self.upload_folder):
-                if filename not in active_files:
-                    os.remove(os.path.join(self.upload_folder, filename))
-        except Exception as e:
-            print(f"Error during cleanup: {e}")
-
-    def get_file_size(self, filename: str) -> Optional[int]:
-        """Get the size of a file in bytes"""
-        try:
-            filepath = os.path.join(self.upload_folder, secure_filename(filename))
+            filepath = os.path.join(self.upload_folder, user_id, secure_filename(filename))
             return os.path.getsize(filepath) if os.path.exists(filepath) else None
         except Exception:
             return None
+
+    def list_user_files(self, user_id: str) -> List[str]:
+        """List all files in a user's directory"""
+        try:
+            user_dir = self.get_user_directory(user_id)
+            return os.listdir(user_dir)
+        except Exception:
+            return []

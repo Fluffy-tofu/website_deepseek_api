@@ -239,7 +239,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success && data.chatId) {
-                    // Initialize new chat state with the ID from the server
+                    // Initialize new chat state
                     chatStates[data.chatId] = {
                         messages: [],
                         files: [],
@@ -247,6 +247,7 @@
                         pendingResponse: null
                     };
 
+                    // Add and switch to new chat tab
                     addChatTab(data.chatId);
                     switchToChat(data.chatId);
                 } else {
@@ -372,9 +373,9 @@
                 event.stopPropagation();
             }
 
-            console.log('Attempting to close chat:', chatId); // Debug log
-
-            if (Object.keys(chatStates).length <= 1) {
+            // Count active chats
+            const activeChats = Object.keys(chatStates).length;
+            if (activeChats <= 1) {
                 showError("Cannot delete the last chat");
                 return;
             }
@@ -382,26 +383,20 @@
             // Find another chat to switch to before closing this one
             const otherChatId = Object.keys(chatStates).find(id => id !== chatId);
 
-            // Construct the URL carefully
-            const url = `/close-chat/${encodeURIComponent(chatId)}`;
-            console.log('Sending request to:', url); // Debug log
-
-            fetch(url, {
+            fetch(`/close-chat/${encodeURIComponent(chatId)}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                credentials: 'same-origin' // Include cookies
+                credentials: 'same-origin'
             })
             .then(response => {
-                console.log('Response status:', response.status); // Debug log
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 return response.json();
             })
             .then(data => {
-                console.log('Response data:', data); // Debug log
                 if (data.success) {
                     // Remove chat state
                     delete chatStates[chatId];
@@ -425,6 +420,7 @@
                 showError(error.message || 'Failed to close chat');
             });
         }
+
 
         function handleFileUpload(event) {
             const files = event.target.files;
@@ -570,6 +566,12 @@
 
             if (isUser) {
                 messageBubble.textContent = content;
+                // Store user message in chat state
+                chatStates[currentChatId].messages.push({
+                    content: content,
+                    isUser: true,
+                    timestamp: new Date().toISOString()
+                });
             } else {
                 messageBubble.innerHTML = formatMarkdown(content);
                 messageBubble.querySelectorAll('pre code').forEach((block) => {
@@ -580,12 +582,6 @@
             messageDiv.appendChild(messageBubble);
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            // Save message to current chat
-            const chat = chats.find(c => c.id === currentChatId);
-            if (chat) {
-                chat.messages.push({ content, isUser });
-            }
 
             return messageBubble;
         }
@@ -642,10 +638,13 @@
                             const data = line.slice(6);
                             if (data === '[DONE]') {
                                 // Store the complete response in chat state
-                                chatStates[currentChatId].messages.push({
-                                    content: fullResponse,
-                                    isUser: false
-                                });
+                                if (fullResponse) {
+                                    chatStates[currentChatId].messages.push({
+                                        content: fullResponse,
+                                        isUser: false,
+                                        timestamp: new Date().toISOString()
+                                    });
+                                }
                                 chatStates[currentChatId].pendingResponse = null;
                                 return true;
                             }
@@ -704,14 +703,6 @@
                         }
 
                         return pump();
-                    })
-                    .catch(error => {
-                        console.error('Error in pump:', error);
-                        if (messageInput) {
-                            messageInput.disabled = false;
-                            messageInput.focus();
-                        }
-                        chatStates[currentChatId].currentStream = null;
                     });
                 }
 
@@ -729,20 +720,12 @@
                     messageInput.focus();
                 }
                 chatStates[currentChatId].currentStream = null;
-            })
-            .finally(() => {
-                // Ensure cleanup happens even if there's an error
-                if (messageInput) {
-                    messageInput.disabled = false;
-                    messageInput.focus();
-                }
-                chatStates[currentChatId].currentStream = null;
             });
         }
 
 
         function handleNormalResponse(message) {
-            fetch('/chat/message', {  // Changed from '/chat' to '/chat/message'
+            fetch('/chat/message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -761,7 +744,8 @@
                     // Store the response in chat state
                     chatStates[currentChatId].messages.push({
                         content: data.response,
-                        isUser: false
+                        isUser: false,
+                        timestamp: new Date().toISOString()
                     });
                 }
                 messageInput.disabled = false;

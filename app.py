@@ -149,11 +149,13 @@ def allowed_file(filename):
 
 
 def create_upload_directory():
+    """Create upload directory if it doesn't exist"""
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 
 @app.before_request
 def before_request():
+    """Ensure upload directory exists and initialize session if needed"""
     create_upload_directory()
     if 'chats' not in session:
         session['chats'] = {
@@ -162,6 +164,8 @@ def before_request():
                 'files': []
             }
         }
+        session.modified = True
+
 
 
 def get_api_response(api_name, messages, context="", stream=False):
@@ -274,18 +278,35 @@ def upload_file():
     if not allowed_file(file.filename):
         return jsonify({"error": "File type not allowed"}), 400
 
+    # Create a directory structure that includes the user_id to prevent file name conflicts
+    user_upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], session['user_id'])
+    os.makedirs(user_upload_dir, exist_ok=True)
+
+    # Create unique filename with user and chat info
     base_filename = secure_filename(file.filename)
     unique_filename = f"{chat_id}_{base_filename}"
+    file_path = os.path.join(user_upload_dir, unique_filename)
 
-    if file_manager.save_file(file, unique_filename):
-        chat_storage.add_file(session['user_id'], chat_id, unique_filename, base_filename)
+    # Save the file
+    try:
+        file.save(file_path)
+
+        # Add file to chat storage with relative path
+        chat_storage.add_file(
+            session['user_id'],
+            chat_id,
+            os.path.join(session['user_id'], unique_filename),  # Store relative path
+            base_filename
+        )
+
         return jsonify({
             "success": True,
-            "filename": unique_filename,
+            "filename": os.path.join(session['user_id'], unique_filename),
             "displayName": base_filename
         })
-
-    return jsonify({"error": "Failed to save file"}), 500
+    except Exception as e:
+        app.logger.error(f"Error saving file: {str(e)}")
+        return jsonify({"error": "Failed to save file"}), 500
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -320,15 +341,33 @@ def home():
     return render_template('index.html', apis=list(API_CONFIGS.keys()))
 
 
-@app.route('/remove-file/<filename>', methods=['POST'])
+@app.route('/remove-file/<path:filename>', methods=['POST'])
 def remove_file(filename):
+    if 'user_id' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
     data = request.get_json(silent=True) or {}
     chat_id = data.get('chatId', 'chat-1')
 
-    result = chat_manager.remove_file(chat_id, filename)
-    if 'error' in result:
-        return jsonify({'error': result['error']}), 400
-    return jsonify({'success': True})
+    # Verify the file belongs to the user
+    if not filename.startswith(session['user_id']):
+        return jsonify({"error": "Access denied"}), 403
+
+    # Get the full file path
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    try:
+        # Remove file from storage
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        # Remove file from chat storage
+        chat_storage.remove_file(session['user_id'], chat_id, filename)
+
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error removing file: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/chat', methods=['GET', 'POST'])
@@ -389,14 +428,17 @@ def chat_stream():
         user_input = data.get('message', '')
         api_name = data.get('api', 'deepseek-chat')
         chat_id = data.get('chatId', 'chat-1')
+        user_id = session['user_id']
+
+        app.logger.info(f"Processing request for user {user_id}, chat {chat_id}")
 
         # Store user message
-        chat_storage.add_message(session['user_id'], chat_id, user_input, True)
+        success = chat_storage.add_message(user_id, chat_id, user_input, True)
+        app.logger.info(f"User message stored: {success}")
 
         # Get file context for this chat
         try:
-            # Get context using ChatStorage
-            context = chat_storage.get_context(session['user_id'], chat_id)
+            context = chat_storage.get_context(user_id, chat_id)
             app.logger.info(f"Context retrieved, length: {len(context)}")
         except Exception as e:
             app.logger.error(f"Error getting context: {str(e)}")
@@ -430,20 +472,25 @@ def chat_stream():
 
         # Prepare the payload based on API type
         if config['type'] == 'anthropic':
+            full_prompt = f"Context from the documents:\n\n{context}\n\nUser question: {user_input}"
             payload = {
                 "model": config['model'],
                 "messages": [{
                     "role": "user",
-                    "content": f"Context:\n{context}\n\nQuestion: {user_input}"
+                    "content": full_prompt
                 }],
                 "max_tokens": 4096,
                 "stream": True
             }
         else:
             # For OpenAI and OpenRouter
+            system_message = "You are a helpful assistant. Please analyze the provided context and answer questions about it."
+            if context:
+                system_message += f"\n\nContext from the documents:\n\n{context}"
+
             messages = [{
                 "role": "system",
-                "content": f"Here is the context from the uploaded documents:\n\n{context}"
+                "content": system_message
             }, {
                 "role": "user",
                 "content": user_input
@@ -489,30 +536,54 @@ def chat_stream():
                     if line:
                         try:
                             line_text = line.decode('utf-8')
+                            app.logger.debug(f"Received line: {line_text}")
+
                             if line_text.startswith('data: '):
                                 data = line_text[6:]
                                 if data == '[DONE]':
-                                    # Store the complete response in chat storage
-                                    chat_storage.add_message(
-                                        session['user_id'],
-                                        chat_id,
-                                        full_response,
-                                        False
-                                    )
+                                    app.logger.info(f"Stream completed. Final response length: {len(full_response)}")
+                                    if full_response:
+                                        # Log before storing
+                                        app.logger.info(
+                                            f"Storing AI response for chat {chat_id}: {full_response[:100]}...")
+
+                                        # Store in chat storage
+                                        success = chat_storage.add_message(
+                                            user_id,
+                                            chat_id,
+                                            full_response,
+                                            False  # This is an AI response
+                                        )
+                                        app.logger.info(f"AI response stored: {success}")
+
+                                        # Verify storage
+                                        user_data = chat_storage.load_user_chats(user_id)
+                                        chat = user_data['chats'].get(chat_id, {})
+                                        messages = chat.get('messages', [])
+                                        app.logger.info(f"Current chat messages: {len(messages)}")
+
                                     yield f"data: [DONE]\n\n"
                                     break
 
-                                parsed_data = json.loads(data)
+                                try:
+                                    parsed_data = json.loads(data)
 
-                                # Handle different API response formats
-                                if config['type'] == 'anthropic':
-                                    content = parsed_data.get('delta', {}).get('text', '')
-                                else:
-                                    content = parsed_data.get('choices', [{}])[0].get('delta', {}).get('content', '')
+                                    # Handle different API response formats
+                                    content = None
+                                    if config['type'] == 'anthropic':
+                                        content = parsed_data.get('delta', {}).get('text', '')
+                                    else:
+                                        content = parsed_data.get('choices', [{}])[0].get('delta', {}).get('content',
+                                                                                                           '')
 
-                                if content:
-                                    full_response += content
-                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                                    if content:
+                                        app.logger.debug(f"Received content chunk: {content}")
+                                        full_response += content
+                                        yield f"data: {json.dumps({'content': content})}\n\n"
+
+                                except json.JSONDecodeError as e:
+                                    app.logger.error(f"JSON decode error in data: {str(e)}")
+                                    continue
 
                         except json.JSONDecodeError as e:
                             app.logger.error(f"JSON decode error: {str(e)} - Line: {line}")
@@ -604,34 +675,59 @@ def close_chat(chat_id):
     if 'user_id' not in session:
         return jsonify({"error": "Not authenticated"}), 401
 
-    # Remove associated files
-    file_manager.clear_user_files(chat_id)
+    user_id = session['user_id']
 
-    # Delete chat data
-    success = chat_storage.delete_chat(session['user_id'], chat_id)
+    # First clear associated files
+    try:
+        file_manager.clear_user_files(chat_id, user_id)
+    except Exception as e:
+        app.logger.error(f"Error clearing files for chat {chat_id}: {str(e)}")
+        return jsonify({'error': 'Failed to clear chat files'}), 500
+
+    # Then delete chat data
+    success = chat_storage.delete_chat(user_id, chat_id)
     if not success:
         return jsonify({'error': 'Failed to delete chat'}), 400
 
     return jsonify({'success': True})
 
 
-@app.route('/clear-chat', methods=['POST'])
-def clear_chat():
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
+def clear_chat(self, user_id: str, chat_id: str) -> bool:
+    """Clear all messages and files from a specific chat"""
+    try:
+        user_data = self.load_user_chats(user_id)
 
-    data = request.get_json()
-    chat_id = data.get('chatId', 'chat-1')
+        if chat_id not in user_data['chats']:
+            return False
 
-    # Clear files associated with this chat
-    file_manager.clear_user_files(chat_id)
+        # Get list of files to delete
+        files_to_delete = []
+        if 'files' in user_data['chats'][chat_id]:
+            files_to_delete = [
+                file_info['name']
+                for file_info in user_data['chats'][chat_id]['files']
+            ]
 
-    # Clear chat data
-    success = chat_storage.clear_chat(session['user_id'], chat_id)
-    if not success:
-        return jsonify({'error': 'Failed to clear chat'}), 400
+        # Clear chat data
+        user_data['chats'][chat_id]['messages'] = []
+        user_data['chats'][chat_id]['files'] = []
+        self.save_user_chats(user_id, user_data)
 
-    return jsonify({'success': True})
+        # Delete associated files
+        user_upload_dir = os.path.join(self.upload_folder, user_id)
+        if os.path.exists(user_upload_dir):
+            for filename in files_to_delete:
+                file_path = os.path.join(user_upload_dir, filename)
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        print(f"Error deleting file {filename}: {str(e)}")
+
+        return True
+    except Exception as e:
+        print(f"Error clearing chat: {str(e)}")
+        return False
 
 
 # Modified get_chat_context function
